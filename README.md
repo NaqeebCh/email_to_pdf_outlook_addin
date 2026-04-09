@@ -1,5 +1,4 @@
 # 📧 Email to PDF — Outlook Add-in
-**by Saim Studios**
 
 Convert any open email to a professionally formatted PDF — **100% private, processed entirely on your device.**
 
