@@ -1,22 +1,15 @@
 /**
- * Email to PDF — Core Logic
+ * Email to PDF — Core Logic (ES5 Compatible for maximum Outlook support)
  * Saim Studios
  *
- * Architecture:
- *  1. Office.onReady()  → initialise add-in
- *  2. loadEmailData()   → read all email metadata + body via Office.js
- *  3. generatePDF()     → render HTML to canvas → compose A4 PDF → download
- *
- * Privacy: 100% client-side. No data leaves the browser.
- * Permissions required: ReadItem only.
+ * This version uses standard 'var' and 'function' to ensure it runs even on
+ * older Outlook installations using IE11 rendering.
  */
 
 'use strict';
 
-/* ═══════════════════════════════════════════════════════════════════
-   STATE
-   ═══════════════════════════════════════════════════════════════════ */
-const state = {
+/* ── State Object ────────────────────────────────────────────────── */
+var state = {
   subject:     '',
   from:        '',
   to:          '',
@@ -24,84 +17,88 @@ const state = {
   date:        '',
   bodyHtml:    '',
   bodyText:    '',
-  loaded:      false,
+  loaded:      false
 };
 
-/* ═══════════════════════════════════════════════════════════════════
-   OFFICE INIT
-   ═══════════════════════════════════════════════════════════════════ */
+/* ── Office Init ─────────────────────────────────────────────────── */
 Office.onReady(function (info) {
   if (info.host === Office.HostType.Outlook) {
-    loadEmailData();
+    // Small delay to ensure mailbox items are fully populated
+    setTimeout(loadEmailData, 500);
   } else {
     showError('This add-in only works inside Outlook.');
   }
 });
 
-/* ═══════════════════════════════════════════════════════════════════
-   LOAD EMAIL DATA
-   ═══════════════════════════════════════════════════════════════════ */
+/* ── Load Email Data ─────────────────────────────────────────────── */
 function loadEmailData() {
-  const item = Office.context.mailbox.item;
+  try {
+    var item = Office.context.mailbox.item;
 
-  if (!item) {
-    showError('Could not access the email item. Please open an email and try again.');
-    return;
-  }
-
-  // ── Subject ──────────────────────────────────────────────────────
-  state.subject = item.subject || '(No Subject)';
-
-  // ── From ─────────────────────────────────────────────────────────
-  if (item.from) {
-    const f = item.from;
-    state.from = f.displayName
-      ? `${f.displayName} <${f.emailAddress}>`
-      : (f.emailAddress || '—');
-  }
-
-  // ── To ───────────────────────────────────────────────────────────
-  if (item.to && Array.isArray(item.to)) {
-    state.to = item.to
-      .map(r => r.displayName ? `${r.displayName} <${r.emailAddress}>` : r.emailAddress)
-      .join('; ') || '—';
-  }
-
-  // ── CC ───────────────────────────────────────────────────────────
-  if (item.cc && Array.isArray(item.cc)) {
-    state.cc = item.cc
-      .map(r => r.displayName ? `${r.displayName} <${r.emailAddress}>` : r.emailAddress)
-      .join('; ') || '';
-  }
-
-  // ── Date ─────────────────────────────────────────────────────────
-  const d = item.dateTimeCreated || item.dateTimeModified;
-  if (d) {
-    state.date = new Date(d).toLocaleString('en-US', {
-      weekday: 'long', year: 'numeric', month: 'long',
-      day: 'numeric', hour: '2-digit', minute: '2-digit', timeZoneName: 'short'
-    });
-  }
-
-  // ── Body (HTML preferred, text fallback) ─────────────────────────
-  item.body.getAsync(Office.CoercionType.Html, { asyncContext: 'html' }, function (result) {
-    if (result.status === Office.AsyncResultStatus.Succeeded) {
-      state.bodyHtml = result.value || '';
-      finaliseLoad();
-    } else {
-      // Fallback to plain text
-      item.body.getAsync(Office.CoercionType.Text, {}, function (r2) {
-        if (r2.status === Office.AsyncResultStatus.Succeeded) {
-          state.bodyText = r2.value || '';
-          state.bodyHtml = `<pre style="white-space:pre-wrap;font-family:monospace;">${escapeHtml(state.bodyText)}</pre>`;
-        }
-        finaliseLoad();
-      });
+    if (!item) {
+      showError('Could not access the email item. Please select an email.');
+      return;
     }
-  });
+
+    // Subject
+    state.subject = item.subject || '(No Subject)';
+
+    // From
+    if (item.from) {
+      state.from = item.from.displayName
+        ? item.from.displayName + ' <' + item.from.emailAddress + '>'
+        : (item.from.emailAddress || '—');
+    }
+
+    // To
+    if (item.to && item.to.length) {
+      state.to = item.to.map(function(r) {
+        return r.displayName ? r.displayName + ' <' + r.emailAddress + '>' : r.emailAddress;
+      }).join('; ');
+    }
+
+    // CC
+    if (item.cc && item.cc.length) {
+      state.cc = item.cc.map(function(r) {
+        return r.displayName ? r.displayName + ' <' + r.emailAddress + '>' : r.emailAddress;
+      }).join('; ');
+    }
+
+    // Date
+    var d = item.dateTimeCreated || item.dateTimeModified;
+    if (d) {
+      state.date = new Date(d).toLocaleString();
+    }
+
+    // Body (with 10-second timeout safety)
+    var timeout = setTimeout(function() {
+      if (!state.loaded) {
+        showError('Timeout: Failed to retrieve email content from Outlook.');
+      }
+    }, 10000);
+
+    item.body.getAsync(Office.CoercionType.Html, function (result) {
+      clearTimeout(timeout);
+      if (result.status === Office.AsyncResultStatus.Succeeded) {
+        state.bodyHtml = result.value || '';
+        finaliseLoad();
+      } else {
+        // Fallback to text
+        item.body.getAsync(Office.CoercionType.Text, function (r2) {
+          if (r2.status === Office.AsyncResultStatus.Succeeded) {
+            state.bodyText = r2.value || '';
+            state.bodyHtml = '<pre style="white-space:pre-wrap;font-family:monospace;">' + escapeHtml(state.bodyText) + '</pre>';
+          }
+          finaliseLoad();
+        });
+      }
+    });
+
+  } catch (err) {
+    showError('Error loading email data: ' + err.message);
+  }
 }
 
-/* ── Finalise after async body load ─────────────────────────────── */
 function finaliseLoad() {
   state.loaded = true;
   populateUI();
@@ -109,424 +106,222 @@ function finaliseLoad() {
   hide('loading-state');
 }
 
-/* ═══════════════════════════════════════════════════════════════════
-   POPULATE UI
-   ═══════════════════════════════════════════════════════════════════ */
+/* ── UI Helpers ──────────────────────────────────────────────────── */
 function populateUI() {
   setText('meta-subject', state.subject);
-  setText('meta-from',    state.from    || '—');
-  setText('meta-to',      state.to      || '—');
-  setText('meta-cc',      state.cc      || '(none)');
-  setText('meta-date',    state.date    || '—');
+  setText('meta-from',    state.from || '—');
+  setText('meta-to',      state.to || '—');
+  setText('meta-cc',      state.cc || '(none)');
+  setText('meta-date',    state.date || '—');
 
-  // Hide CC row if empty
   if (!state.cc) {
-    const row = document.getElementById('cc-row');
+    var row = document.getElementById('cc-row');
     if (row) row.style.display = 'none';
   }
 
-  // Set sanitised filename
-  const input = document.getElementById('pdf-filename');
+  var input = document.getElementById('pdf-filename');
   if (input) {
     input.value = sanitiseFilename(state.subject);
   }
 }
 
-/* ═══════════════════════════════════════════════════════════════════
-   GENERATE PDF
-   (called by the button onclick in HTML)
-   ═══════════════════════════════════════════════════════════════════ */
-async function generatePDF() {  // eslint-disable-line no-unused-vars
-  if (!state.loaded) {
-    showError('Email data is still loading. Please wait a moment.');
-    return;
-  }
+/* ── PDF Generation ──────────────────────────────────────────────── */
+function generatePDF() {
+  if (!state.loaded) return;
 
-  // ── Read options ─────────────────────────────────────────────────
-  const opts = {
+  var opts = {
     metadata:    document.getElementById('opt-metadata').checked,
     recipients:  document.getElementById('opt-recipients').checked,
     date:        document.getElementById('opt-date').checked,
     html:        document.getElementById('opt-html').checked,
     pageNumbers: document.getElementById('opt-pagenumbers').checked,
-    pageSize:    document.getElementById('opt-pagesize').value,
+    pageSize:    document.getElementById('opt-pagesize').value
   };
 
-  const filenameInput = document.getElementById('pdf-filename');
-  const filename = sanitiseFilename(filenameInput.value.trim() || state.subject) + '.pdf';
+  var filenameInput = document.getElementById('pdf-filename');
+  var filename = sanitiseFilename(filenameInput.value.trim() || state.subject) + '.pdf';
 
-  // ── UI: start progress ───────────────────────────────────────────
   setBtnDisabled(true);
   hide('toast-success');
   show('progress-wrap');
-  setProgress(5, 'Preparing email content…');
+  setProgress(10, 'Preparing PDF engine...');
 
+  // Using a slight delay to allow UI updates
+  setTimeout(function() {
+    executePDFCreation(opts, filename);
+  }, 100);
+}
+
+function executePDFCreation(opts, filename) {
   try {
-    // ── 1. Build render HTML ──────────────────────────────────────
-    setProgress(15, 'Sanitising email body…');
-    const sanitised = sanitiseBody(state.bodyHtml, opts.html);
-    const renderHtml = buildRenderHtml(sanitised, opts);
-
-    // ── 2. Inject into off-screen render target ───────────────────
-    setProgress(25, 'Rendering layout…');
-    const renderTarget = document.getElementById('render-target');
+    setProgress(20, 'Building document...');
+    var sanitised = sanitiseBody(state.bodyHtml, opts.html);
+    var renderHtml = buildRenderHtml(sanitised, opts);
+    var renderTarget = document.getElementById('render-target');
     renderTarget.innerHTML = renderHtml;
 
-    // Give the browser one frame to paint the injected DOM
-    await sleep(80);
-    setProgress(40, 'Capturing page…');
+    setProgress(40, 'Rendering frames (this may take a moment)...');
 
-    // ── 3. Render to canvas via html2canvas ───────────────────────
-    const canvas = await html2canvas(renderTarget, {
-      scale: 2,               // 2x for high-DPI / print quality
-      useCORS: false,         // no external images — privacy
-      allowTaint: false,
-      backgroundColor: '#ffffff',
-      logging: false,
-      imageTimeout: 0,
-      removeContainer: false,
-    });
+    // Use html2canvas
+    html2canvas(renderTarget, {
+      scale: 2,
+      useCORS: false,
+      backgroundColor: '#ffffff'
+    }).then(function(canvas) {
+      setProgress(70, 'Composing PDF pages...');
+      
+      var format = opts.pageSize || 'a4';
+      var pdf = new jspdf.jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: format,
+        compress: true
+      });
 
-    setProgress(70, 'Composing PDF…');
+      var pageW = pdf.internal.pageSize.getWidth();
+      var pageH = pdf.internal.pageSize.getHeight();
+      
+      var margin = 15;
+      var contentW = pageW - (margin * 2);
+      var scale = contentW / (canvas.width / 2);
+      var contentH_mm = (canvas.height / 2) * scale;
+      var pageContentH = pageH - (margin * 2) - (opts.pageNumbers ? 10 : 0);
 
-    // ── 4. Compose PDF with jsPDF ─────────────────────────────────
-    // Choose format
-    const formatMap = { a4: 'a4', letter: 'letter', legal: 'legal' };
-    const format = formatMap[opts.pageSize] || 'a4';
+      var sourceY_px = 0;
+      var pageNum = 1;
+      var totalPages = Math.ceil(contentH_mm / pageContentH);
 
-    // A4: 210×297mm  |  Letter: 216×279mm  |  Legal: 216×356mm
-    const pageDimensions = {
-      a4:     { w: 210, h: 297 },
-      letter: { w: 216, h: 279 },
-      legal:  { w: 216, h: 356 },
-    };
-    const pageDim = pageDimensions[format];
+      while (sourceY_px < canvas.height) {
+        if (pageNum > 1) pdf.addPage(format, 'portrait');
 
-    const pdf = new jspdf.jsPDF({
-      orientation: 'portrait',
-      unit: 'mm',
-      format: format,
-      compress: true,
-    });
+        var pxThisPage = Math.min(Math.round(pageContentH / scale * 2), canvas.height - sourceY_px);
+        var slice = document.createElement('canvas');
+        slice.width = canvas.width;
+        slice.height = pxThisPage;
+        var ctx = slice.getContext('2d');
+        ctx.drawImage(canvas, 0, sourceY_px, canvas.width, pxThisPage, 0, 0, canvas.width, pxThisPage);
 
-    // Margins in mm
-    const marginL = 15;
-    const marginR = 15;
-    const marginT = 15;
-    const marginB = 15;
+        var imgData = slice.toDataURL('image/png');
+        pdf.addImage(imgData, 'PNG', margin, margin, contentW, (pxThisPage / 2) * scale, '', 'FAST');
 
-    const canvasWidth    = canvas.width;
-    const canvasHeight   = canvas.height;
-    const pdfContentW    = pageDim.w - marginL - marginR;  // usable width in mm
+        if (opts.pageNumbers) {
+          pdf.setFontSize(8);
+          pdf.setTextColor(150, 150, 150);
+          pdf.text('Page ' + pageNum + ' of ' + totalPages, pageW / 2, pageH - 10, { align: 'center' });
+        }
 
-    // Scale factor: canvas px → mm
-    const scale          = pdfContentW / (canvasWidth / 2); // /2 because we used scale:2
-    const totalContentH  = (canvasHeight / 2) * scale;       // total height in mm
-
-    // Usable height per page (leave footer space if page numbers on)
-    const footerH        = opts.pageNumbers ? 8 : 0;
-    const pageContentH   = pageDim.h - marginT - marginB - footerH;
-
-    let sourceY          = 0;  // in CANVAS pixels (full scale)
-    let pageNumber       = 1;
-    const totalPages     = Math.ceil(totalContentH / pageContentH);
-
-    while (sourceY < canvasHeight) {
-      if (pageNumber > 1) pdf.addPage(format, 'portrait');
-
-      // How many mm of content this page can hold → how many px that is
-      const pxPerPage = Math.round(pageContentH / scale * 2); // back to full-scale px
-
-      // Clamp to remaining canvas
-      const pxThisPage = Math.min(pxPerPage, canvasHeight - sourceY);
-
-      // Create a slice canvas
-      const sliceCanvas = document.createElement('canvas');
-      sliceCanvas.width  = canvasWidth;
-      sliceCanvas.height = pxThisPage;
-      const ctx = sliceCanvas.getContext('2d');
-      ctx.drawImage(canvas, 0, sourceY, canvasWidth, pxThisPage, 0, 0, canvasWidth, pxThisPage);
-
-      const imgData = sliceCanvas.toDataURL('image/png');
-      const sliceHmm = (pxThisPage / 2) * scale;
-
-      pdf.addImage(imgData, 'PNG', marginL, marginT, pdfContentW, sliceHmm, '', 'FAST');
-
-      // ── Page number footer ──────────────────────────────────────
-      if (opts.pageNumbers) {
-        pdf.setFont('helvetica', 'normal');
-        pdf.setFontSize(8);
-        pdf.setTextColor(150, 150, 150);
-        const footerY = pageDim.h - marginB - 2;
-        pdf.text(`Page ${pageNumber} of ${totalPages}`, pageDim.w / 2, footerY, { align: 'center' });
-        // Thin separator line
-        pdf.setDrawColor(220, 220, 220);
-        pdf.setLineWidth(0.2);
-        pdf.line(marginL, footerY - 3, pageDim.w - marginR, footerY - 3);
+        sourceY_px += pxThisPage;
+        pageNum++;
       }
 
-      sourceY    += pxThisPage;
-      pageNumber += 1;
-    }
+      pdf.save(filename);
+      
+      setProgress(100, 'Success!');
+      setTimeout(function() {
+        hide('progress-wrap');
+        show('toast-success');
+        setBtnDisabled(false);
+      }, 500);
+      renderTarget.innerHTML = '';
 
-    setProgress(90, 'Saving…');
-    await sleep(100);
-
-    // ── 5. Clean up render target ─────────────────────────────────
-    renderTarget.innerHTML = '';
-
-    // ── 6. Download ───────────────────────────────────────────────
-    pdf.save(filename);
-
-    setProgress(100, 'Done!');
-    await sleep(400);
-
-    // ── 7. Success feedback ───────────────────────────────────────
-    hide('progress-wrap');
-    show('toast-success');
-    setBtnDisabled(false);
-
-    // Auto-hide toast after 5s
-    setTimeout(() => hide('toast-success'), 5000);
-
-  } catch (err) {
-    hide('progress-wrap');
-    setBtnDisabled(false);
-    console.error('[Email to PDF] Error:', err);
-    showError('Failed to generate PDF: ' + (err.message || String(err)));
-  }
-}
-
-/* ═══════════════════════════════════════════════════════════════════
-   BUILD RENDER HTML
-   Constructs the white A4-width document that will be screenshot-d
-   ═══════════════════════════════════════════════════════════════════ */
-function buildRenderHtml(body, opts) {
-  const parts = [];
-
-  parts.push(`
-    <div style="
-      font-family: Arial, Helvetica, sans-serif;
-      font-size: 13px;
-      color: #111111;
-      background: #ffffff;
-      padding: 32px 36px 40px;
-      -webkit-print-color-adjust: exact;
-    ">
-  `);
-
-  // ── Metadata header table ───────────────────────────────────────
-  if (opts.metadata) {
-    parts.push(`
-      <table style="
-        width: 100%; border-collapse: collapse;
-        margin-bottom: 24px;
-        border: 1px solid #dee2e6;
-        border-radius: 6px;
-        overflow: hidden;
-        font-size: 12px;
-      ">
-        <thead>
-          <tr style="background: #1e3a5f;">
-            <td colspan="2" style="padding: 10px 14px; color: #ffffff; font-weight: 700; font-size: 13px; letter-spacing: 0.02em;">
-              📧 Email Details
-            </td>
-          </tr>
-        </thead>
-        <tbody>
-    `);
-
-    const rows = [];
-
-    if (state.subject) {
-      rows.push(['Subject', escapeHtml(state.subject)]);
-    }
-    if (opts.recipients) {
-      if (state.from)      rows.push(['From',  escapeHtml(state.from)]);
-      if (state.to)        rows.push(['To',    escapeHtml(state.to)]);
-      if (state.cc)        rows.push(['CC',    escapeHtml(state.cc)]);
-    }
-    if (opts.date && state.date) {
-      rows.push(['Date', escapeHtml(state.date)]);
-    }
-
-    rows.forEach(([label, value], i) => {
-      const bg = i % 2 === 0 ? '#f8fafc' : '#ffffff';
-      parts.push(`
-        <tr style="background: ${bg};">
-          <td style="
-            padding: 7px 14px;
-            font-weight: 600;
-            color: #374151;
-            width: 72px;
-            border-bottom: 1px solid #e9ecef;
-            vertical-align: top;
-            white-space: nowrap;
-          ">${label}</td>
-          <td style="
-            padding: 7px 14px;
-            color: #4b5563;
-            border-bottom: 1px solid #e9ecef;
-            word-break: break-word;
-          ">${value}</td>
-        </tr>
-      `);
+    }).catch(function(err) {
+      showError('PDF Rendering failed: ' + err.message);
+      setBtnDisabled(false);
     });
 
-    parts.push('</tbody></table>');
-
-    // Divider
-    parts.push(`<hr style="border: none; border-top: 2px solid #e2e8f0; margin: 0 0 24px;">`);
+  } catch (err) {
+    showError('Error creating PDF: ' + err.message);
+    setBtnDisabled(false);
   }
-
-  // ── Email body ─────────────────────────────────────────────────
-  parts.push(`<div class="email-body" style="
-    line-height: 1.6;
-    word-break: break-word;
-    overflow-wrap: break-word;
-  ">`);
-  parts.push(body);
-  parts.push('</div>');
-
-  parts.push('</div>');
-
-  return parts.join('\n');
 }
 
-/* ═══════════════════════════════════════════════════════════════════
-   SANITISE HTML BODY
-   Strips dangerous tags & external resources for security + privacy
-   ═══════════════════════════════════════════════════════════════════ */
-function sanitiseBody(html, preserveStyling) {
-  if (!html || html.trim() === '') {
-    return '<p style="color:#888;">(This email has no body content.)</p>';
+/* ── Rendering Support ───────────────────────────────────────────── */
+function buildRenderHtml(body, opts) {
+  var html = '<div style="font-family:Arial,sans-serif;font-size:13px;color:#111;background:#fff;padding:30px;">';
+  
+  if (opts.metadata) {
+    html += '<div style="margin-bottom:20px;border:1px solid #ddd;padding:15px;background:#f9f9f9;border-radius:4px;">';
+    html += '<h3 style="margin:0 0 10px;font-size:14px;color:#333;">📧 Email Information</h3>';
+    if (state.subject) html += '<div><b>Subject:</b> ' + escapeHtml(state.subject) + '</div>';
+    if (opts.recipients) {
+      if (state.from) html += '<div><b>From:</b> ' + escapeHtml(state.from) + '</div>';
+      if (state.to)   html += '<div><b>To:</b> ' + escapeHtml(state.to) + '</div>';
+    }
+    if (opts.date && state.date) html += '<div><b>Date:</b> ' + escapeHtml(state.date) + '</div>';
+    html += '</div><hr style="border:none;border-top:1px solid #eee;margin-bottom:20px;">';
   }
 
-  const parser  = new DOMParser();
-  const doc     = parser.parseFromString(html, 'text/html');
+  html += '<div class="body-content">' + body + '</div>';
+  html += '</div>';
+  return html;
+}
 
-  // ── Remove dangerous elements ───────────────────────────────────
-  const REMOVE_TAGS = ['script', 'style[data-remove]', 'iframe', 'frame',
-                       'object', 'embed', 'applet', 'form', 'input',
-                       'button', 'link[rel="stylesheet"]'];
-  REMOVE_TAGS.forEach(selector => {
-    doc.querySelectorAll(selector).forEach(el => el.remove());
-  });
+function sanitiseBody(html, preserveStyling) {
+  if (!html) return '(No content)';
+  var div = document.createElement('div');
+  div.innerHTML = html;
 
-  // Remove ALL <script> tags absolutely
-  doc.querySelectorAll('script').forEach(el => el.remove());
+  var scripts = div.getElementsByTagName('script');
+  for (var i = scripts.length - 1; i >= 0; i--) {
+    scripts[i].parentNode.removeChild(scripts[i]);
+  }
 
-  // ── Remove external image sources (privacy) ─────────────────────
-  doc.querySelectorAll('img').forEach(img => {
-    const src = img.getAttribute('src') || '';
-    // Allow data URIs (inline images) only
-    if (!src.startsWith('data:')) {
-      // Replace with a small placeholder text
-      const span = doc.createElement('span');
-      span.style.cssText = 'display:inline-block; padding:2px 6px; background:#f1f5f9; border:1px solid #e2e8f0; border-radius:3px; font-size:11px; color:#94a3b8;';
-      span.textContent = '[image]';
-      img.parentNode && img.parentNode.replaceChild(span, img);
+  var imgs = div.getElementsByTagName('img');
+  for (var j = 0; j < imgs.length; j++) {
+    var src = imgs[j].getAttribute('src') || '';
+    if (src.indexOf('data:') !== 0) {
+      imgs[j].style.display = 'none'; // Privacy: hide remote images
     }
-  });
-
-  // ── Strip event handlers ────────────────────────────────────────
-  const EVENT_ATTRS = ['onclick','onload','onerror','onmouseover','onmouseout',
-                       'onfocus','onblur','onchange','onsubmit','onkeydown',
-                       'onkeyup','onkeypress'];
-  doc.querySelectorAll('*').forEach(el => {
-    EVENT_ATTRS.forEach(attr => el.removeAttribute(attr));
-    // Strip javascript: hrefs
-    const href = el.getAttribute('href') || '';
-    if (/^javascript:/i.test(href)) el.removeAttribute('href');
-  });
-
-  // ── Remove external link targets (open in new tabs safely) ─────
-  doc.querySelectorAll('a[href]').forEach(a => {
-    a.setAttribute('target', '_blank');
-    a.setAttribute('rel', 'noopener noreferrer');
-  });
+  }
 
   if (!preserveStyling) {
-    // Strip inline styles if user opted out
-    doc.querySelectorAll('[style]').forEach(el => el.removeAttribute('style'));
+    var all = div.getElementsByTagName('*');
+    for (var k = 0; k < all.length; k++) {
+      all[k].removeAttribute('style');
+    }
   }
 
-  // Extract just the body content
-  const body = doc.body;
-  return body ? body.innerHTML : html;
+  return div.innerHTML;
 }
 
-/* ═══════════════════════════════════════════════════════════════════
-   HELPERS
-   ═══════════════════════════════════════════════════════════════════ */
-
-/**
- * Sanitise a string for use as a filename.
- * Removes illegal characters, collapses whitespace, trims to 200 chars.
- */
+/* ── General Helpers ─────────────────────────────────────────────── */
 function sanitiseFilename(name) {
-  if (!name || name.trim() === '') {
-    return 'email_' + Date.now();
-  }
-  return name
-    .trim()
-    .replace(/[/\\:*?"<>|]/g, '_')  // illegal filename chars
-    .replace(/\s+/g, ' ')           // collapse whitespace
-    .replace(/\.+$/, '')            // no trailing dots
-    .slice(0, 200)                  // max 200 chars
-    || 'email_' + Date.now();
+  return (name || 'email').replace(/[/\\:*?"<>|]/g, '_').slice(0, 50);
 }
 
-/** Escape HTML special chars */
 function escapeHtml(str) {
-  if (!str) return '';
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-/** Sleep for ms milliseconds */
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-/* ── DOM Helpers ──────────────────────────────────────────────────── */
 function show(id) {
-  const el = document.getElementById(id);
+  var el = document.getElementById(id);
   if (el) el.classList.remove('hidden');
 }
 
 function hide(id) {
-  const el = document.getElementById(id);
+  var el = document.getElementById(id);
   if (el) el.classList.add('hidden');
 }
 
-function setText(id, value) {
-  const el = document.getElementById(id);
-  if (el) el.textContent = value;
+function setText(id, val) {
+  var el = document.getElementById(id);
+  if (el) el.textContent = val;
 }
 
 function setProgress(pct, text) {
-  const fill = document.getElementById('progress-fill');
-  const label = document.getElementById('progress-text');
+  var fill = document.getElementById('progress-fill');
+  var lbl = document.getElementById('progress-text');
   if (fill) fill.style.width = pct + '%';
-  if (label) label.textContent = text;
+  if (lbl) lbl.textContent = text;
 }
 
-function setBtnDisabled(disabled) {
-  const btn = document.getElementById('btn-generate');
-  const label = document.getElementById('btn-label');
-  if (btn) btn.disabled = disabled;
-  if (label) label.textContent = disabled ? 'Generating PDF…' : 'Generate & Download PDF';
+function setBtnDisabled(d) {
+  var btn = document.getElementById('btn-generate');
+  if (btn) btn.disabled = d;
 }
 
-/* ── Error display ────────────────────────────────────────────────── */
 function showError(msg) {
   hide('loading-state');
-  hide('main-content');
-  const errMsg = document.getElementById('error-message');
-  if (errMsg) errMsg.textContent = msg;
   show('error-state');
+  setText('error-message', msg);
 }
