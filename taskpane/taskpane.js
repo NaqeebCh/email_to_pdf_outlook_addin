@@ -1,6 +1,6 @@
 /**
  * Email to PDF — Core Logic (ES5 Compatible for maximum Outlook support)
- * Saim Studios
+ * Naqeeb Ch
  *
  * This version uses standard 'var' and 'function' to ensure it runs even on
  * older Outlook installations using IE11 rendering.
