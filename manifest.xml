@@ -44,7 +44,7 @@
     <Form xsi:type="ItemRead">
       <DesktopSettings>
         <SourceLocation DefaultValue="https://naqeebch.github.io/email_to_pdf_outlook_addin/taskpane/taskpane.html"/>
-        <RequestedHeight>500</RequestedHeight>
+        <RequestedHeight>450</RequestedHeight>
       </DesktopSettings>
     </Form>
   </FormSettings>
